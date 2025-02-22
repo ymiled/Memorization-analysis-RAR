@@ -42,7 +42,7 @@ data_transforms = transforms.Compose(
                 ToTensor(),
                 Normalize(0.5, 0.5)
             ])
-CIFAR_10_Dataset = torchvision.datasets.CIFAR10(datapath, train=True, download=True,
+CIFAR_10_Dataset = torchvision.datasets.CIFAR10(datapath, train=True, download=False,
                                                  transform=data_transforms)
 
 sublist = list(range(0, 2, 1))
@@ -94,37 +94,8 @@ if __name__ == '__main__':
     for img, label in tqdm(iter(dataloader)):
         img = img.to(device)
         final = []
-        # Tokenize the input image
-        with torch.no_grad():
-            tokens = tokenizer.encode(Aug(img))  # img shape: [1, 3, 32, 32]
-            tokens = tokens.to(device)  # Move tokens to the correct device
 
-        for j in range(10):
-
-            for i, block in enumerate(new_m.blocks.module_list):
-                print(f"Block {i}:")
-                
-                # You can access each submodule within a block
-                x = block.norm1(tokens)
-                print(f"  norm1: {x}")
-                x = block.attn(x)
-                print(f"  attn: {x}")
-                x = block.mlp(x)
-                print(f"  mlp: {x}")
-                print(f"  adaLN_modulation: {block.adaLN_modulation}")
-                
-                # Optionally, you can access individual layers inside submodules
-                print(f"    Attention qkv layer: {block.attn.qkv}")
-                print(f"    MLP fc1 layer: {block.mlp.fc1}")
-                print(f"    MLP fc2 layer: {block.mlp.fc2}")
-                
-                # If you want to inspect the input/output at each block
-                # You can pass a dummy input through it
-                dummy_input = torch.randn(1, 1408)  # Adjust to your input shape
-                output = block(dummy_input)
-                print(f"  Output shape after block {i}: {output.shape}")
-
-            
+        for j in range(10):           
             out = new_m(Aug(img)) # to extract the output of a particular layer in the model
             for k, v in out.items():
                 # v is the activation tensor, k is the layer name (here it is 'feat1')
