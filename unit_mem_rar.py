@@ -9,20 +9,10 @@ from tqdm import tqdm
 from PIL import Image
 import numpy as np
 import demo_util
-from huggingface_hub import hf_hub_download
 from utils.train_utils import create_pretrained_tokenizer
 import torch.nn as nn
 import torchvision.models._utils as utils
-from wrapper import ModuleListWrapper
 
-# image = Image.open("assets/rar_generated_226.png").convert("RGB") 
-# image_array = np.array(image)
-# scipy.io.savemat("test_image.mat", {"test_image": image_array})
-# print("PNG successfully converted to MAT file.")
-
-
-# data_in = h5py.File('./test_image.mat', 'r')
-# b = np.array(data_in['ans'],dtype='int').reshape(300)
 
 
 datapath = './data'
@@ -32,7 +22,7 @@ color_jitter = transforms.ColorJitter(
 flip = transforms.RandomHorizontalFlip()
 Aug = transforms.Compose(
     [
-    transforms.RandomResizedCrop(size=32),
+    transforms.RandomResizedCrop(size=256),
     transforms.RandomApply([flip], p=0.5),
     transforms.RandomApply([color_jitter], p=0.9),
     transforms.RandomGrayscale(p=0.1)
@@ -44,6 +34,19 @@ data_transforms = transforms.Compose(
             ])
 CIFAR_10_Dataset = torchvision.datasets.CIFAR10(datapath, train=True, download=False,
                                                  transform=data_transforms)
+
+
+
+# resizing the image to 256x256 to be compatible with the VQ tokenizer : 
+resize_transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+CIFAR_10_Dataset = torchvision.datasets.CIFAR10(
+    datapath, train=True, download=False, transform=resize_transform
+)
+
 
 sublist = list(range(0, 2, 1))
 subset = torch.utils.data.Subset(CIFAR_10_Dataset, sublist)
@@ -63,54 +66,37 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # maskgit-vq as tokenizer
 tokenizer = create_pretrained_tokenizer(config)
-generator = demo_util.get_rar_generator(config)
+model = demo_util.get_rar_generator(config)
 tokenizer.to(device)
-generator.to(device)
+model.to(device)
 
-
-
-model = generator
-model.load_state_dict(torch.load('./rar_xxl.bin', map_location=device))
-print("The model is: ", model)
-    
-
-new_m = torchvision.models._utils.IntermediateLayerGetter(model, {'lm_head': 'feat1'})
-# new_m = model.blocks[15].norm1
-new_m = new_m.to(device)
-
-
-model.blocks = ModuleListWrapper(model.blocks)
-
-new_m = utils.IntermediateLayerGetter(model, {'blocks': 'feat1'})
-
-
-print("new_m: ", new_m)
-
-print('-------------------------------------------')
 
 final1 = []
-
+layer = 10
 if __name__ == '__main__':
     for img, label in tqdm(iter(dataloader)):
-        img = img.to(device)
         final = []
-
-        for j in range(10):           
-            out = new_m(Aug(img)) # to extract the output of a particular layer in the model
-            for k, v in out.items():
-                # v is the activation tensor, k is the layer name (here it is 'feat1')
-                my = np.mean(v.reshape(256, 4).cpu().detach().numpy(), axis=1) # 256 neurons, and for each neuron 4 values (sub activation values)
-                final.append(my)
+        img = Aug(img)
+        img = img.to(device)
+        label = label.to(device)
+        
+        with torch.no_grad():
+            tokens = tokenizer.encode(img)
+            for j in range(10):
+                _, intermediates = model(tokens, condition=label)
+                out = intermediates[layer]
+                # print("out = ", out)
+                print("out shape = ", out.shape)
+                activations = np.mean(out.reshape(258, 1408).cpu().detach().numpy(), axis=1)
+                print("max activation = ", np.max(activations))
+                final.append(activations)
         out1 = np.mean(np.array(final), axis=0)
         final1.append(out1)
-
+    
     finalout = np.array(final1)
     maxout = np.max(finalout, axis=0)
     medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
-    selectivity = (maxout - medianout)/(maxout + medianout)
-    scipy.io.savemat('./data/selectivity_unit.mat', {'selectivity': selectivity})
+    selectivity = (maxout - medianout) / (maxout + medianout)
     
-    print("filnalout = ", finalout)
-    print("maxout = ", maxout)
-    print("medianout = ", medianout)
-    print("selectivity = ", selectivity)
+    print(selectivity)
+    print(np.max(selectivity))

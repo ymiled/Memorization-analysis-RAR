@@ -319,13 +319,17 @@ class RAR(BaseModel):
     def forward_fn(self, input_ids, condition,
                    return_labels=False,
                    orders=None,
-                   is_sampling=False):
+                   is_sampling=False,
+                   return_intermediates=True):
+        
         # TODO: optimize the inference time where the computation of pos_embed etc can be shared across sampling steps.
         # Token space:
         #  [0, codebook_size - 1]                       : those are the learned quantized image tokens
         #  codebook_size                                : the mask token used to mask image tokens
         #  [codebook_size + 1, codebook_size + nclass]  : the imagenet class tokens
         #  codebook_size + 1 + nclass                   : the class drop label
+        
+        intermediates = []
 
         if orders is None:
             orders = self.get_raster_orders(input_ids)
@@ -333,7 +337,7 @@ class RAR(BaseModel):
         labels = input_ids.clone()
         # prepend condition token
         input_ids = torch.cat([condition.view(condition.shape[0], -1),
-                               input_ids.view(input_ids.shape[0], -1),], dim=1)
+                               input_ids.reshape(input_ids.shape[0], -1),], dim=1)
         embeddings = self.embeddings(input_ids)
         condition_token = embeddings[:, 0]
 
@@ -386,10 +390,14 @@ class RAR(BaseModel):
 
         for idx, blk in enumerate(self.blocks):
             if self.use_checkpoint:
+                # print("conditon_token is here ", condition_token)
                 x = torch.utils.checkpoint.checkpoint(
-                        blk.forward, x, attn_mask, condition_token, use_reentrant=False)
+                        blk.forward, x, attn_mask, c=condition_token, use_reentrant=False)
             else:
+                # print("else : conditon_token is here ", condition_token)
                 x = blk(x, attn_mask=attn_mask, c=condition_token)
+                
+            intermediates.append(x)
 
         if not self.blocks[0].attn.kv_cache:
             # remove cls token
@@ -398,7 +406,12 @@ class RAR(BaseModel):
 
 
         x = self.adaln_before_head(x, condition_token)
+        intermediates.append(x)
         x = self.lm_head(x)
+        intermediates.append(x)
+        
+        if return_intermediates:
+            return x, intermediates
 
         if return_labels:
             return x, labels
@@ -433,14 +446,14 @@ class RAR(BaseModel):
             cfg_scale = (guidance_scale - 1) * scale_step + 1
 
             if guidance_scale != 0:
-                logits = self.forward_fn(
+                logits, intermediates = self.forward_fn(
                     torch.cat([ids, ids], dim=0),
                     torch.cat([condition, self.get_none_condition(condition)], dim=0),
                     orders=cfg_orders, is_sampling=True)
                 cond_logits, uncond_logits = logits[:num_samples], logits[num_samples:]
                 logits = uncond_logits + (cond_logits - uncond_logits) * cfg_scale
             else:
-                logits = self.forward_fn(
+                logits, intermediates = self.forward_fn(
                     ids, condition, orders=orders, is_sampling=True
                 )
 
@@ -453,5 +466,5 @@ class RAR(BaseModel):
 
 
         self.disable_kv_cache()
-        return ids
+        return ids, intermediates
     
