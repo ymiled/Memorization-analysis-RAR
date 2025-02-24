@@ -12,8 +12,8 @@ import demo_util
 from utils.train_utils import create_pretrained_tokenizer
 import torch.nn as nn
 import torchvision.models._utils as utils
-
-
+import plotly.express as px
+import plotly.graph_objects as go
 
 datapath = './data'
 s = 1
@@ -32,10 +32,6 @@ data_transforms = transforms.Compose(
                 ToTensor(),
                 Normalize(0.5, 0.5)
             ])
-CIFAR_10_Dataset = torchvision.datasets.CIFAR10(datapath, train=True, download=False,
-                                                 transform=data_transforms)
-
-
 
 # resizing the image to 256x256 to be compatible with the VQ tokenizer : 
 resize_transform = transforms.Compose([
@@ -43,14 +39,27 @@ resize_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5,), (0.5,))
 ])
+
+# Image_net = torchvision.datasets.ImageNet(
+#     datapath, download=True, transform=resize_transform
+# )
+
+
 CIFAR_10_Dataset = torchvision.datasets.CIFAR10(
-    datapath, train=True, download=False, transform=resize_transform
+    datapath, train=True, download=True, transform=resize_transform
 )
+
 
 
 sublist = list(range(0, 2, 1))
 subset = torch.utils.data.Subset(CIFAR_10_Dataset, sublist)
 dataloader = torch.utils.data.DataLoader(subset, 1, shuffle=False, num_workers=2)
+
+cifar_to_imagenet = {
+    6: 30,
+    9: 555
+}
+
 
 
 rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][3]
@@ -71,32 +80,36 @@ tokenizer.to(device)
 model.to(device)
 
 
-final1 = []
-layer = 10
 if __name__ == '__main__':
-    for img, label in tqdm(iter(dataloader)):
-        final = []
-        img = Aug(img)
-        img = img.to(device)
-        label = label.to(device)
-        
-        with torch.no_grad():
-            tokens = tokenizer.encode(img)
+    nb_layers = 42
+    max_selectivity_per_layer = []
+    for layer in range(nb_layers):
+        final1 = []      
+        for img, label in tqdm(iter(dataloader)):
+            final = []        
+            img = img.to(device)
+            label = torch.tensor([cifar_to_imagenet[label.item()]]).to(device)
             for j in range(10):
-                _, intermediates = model(tokens, condition=label)
-                out = intermediates[layer]
-                # print("out = ", out)
-                print("out shape = ", out.shape)
-                activations = np.mean(out.reshape(258, 1408).cpu().detach().numpy(), axis=1)
-                print("max activation = ", np.max(activations))
-                final.append(activations)
-        out1 = np.mean(np.array(final), axis=0)
-        final1.append(out1)
+                with torch.no_grad():
+                    tokens = tokenizer.encode(Aug(img))
+                    _, intermediates = model(tokens, condition=label)
+                    out = intermediates[layer]
+                    activations = np.mean(out.reshape(out.size(1), out.size(2)).cpu().detach().numpy(), axis=1)
+                    # we take the absolute value of the activations because some of them like Gelu have negative values
+                    # and we are interested in the magnitude of the activations
+                    activations = np.abs(activations)
+                    final.append(activations)
+                
+            out1 = np.mean(np.array(final), axis=0)
+
+            final1.append(out1)
+        
+        finalout = np.array(final1)
+        maxout = np.max(finalout, axis=0)
+        medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
+        selectivity = (maxout - medianout) / (maxout + medianout)
+        
+        print(f"maximum selectivity for layer {layer}: {np.max(selectivity)}, which corresponds to neuron {np.argmax(selectivity)}")
+        max_selectivity_per_layer.append(np.max(selectivity))
     
-    finalout = np.array(final1)
-    maxout = np.max(finalout, axis=0)
-    medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
-    selectivity = (maxout - medianout) / (maxout + medianout)
     
-    print(selectivity)
-    print(np.max(selectivity))
