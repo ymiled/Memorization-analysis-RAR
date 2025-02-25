@@ -79,13 +79,15 @@ model = demo_util.get_rar_generator(config)
 tokenizer.to(device)
 model.to(device)
 
-
 if __name__ == '__main__':
-    nb_layers = 42
-    max_selectivity_per_layer = []
+    nb_layers = 82
+    total_neurons = 21154
+    top_percent = 0.1
+    top_mem_neurons = []
     for layer in range(nb_layers):
         final1 = []      
-        for img, label in tqdm(iter(dataloader)):
+        first = True
+        for img, label in (iter(dataloader)):
             final = []        
             img = img.to(device)
             label = torch.tensor([cifar_to_imagenet[label.item()]]).to(device)
@@ -99,7 +101,7 @@ if __name__ == '__main__':
                     # and we are interested in the magnitude of the activations
                     activations = np.abs(activations)
                     final.append(activations)
-                
+                               
             out1 = np.mean(np.array(final), axis=0)
 
             final1.append(out1)
@@ -109,7 +111,22 @@ if __name__ == '__main__':
         medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
         selectivity = (maxout - medianout) / (maxout + medianout)
         
+        for neuron_idx, selec in enumerate(selectivity):
+            candidate = (selec, layer, neuron_idx)
+            if selec > 0.7:
+                top_mem_neurons.append(candidate)
+
+            # if len(top_mem_neurons) < top_percent * total_neurons:  
+            #     top_mem_neurons.append(candidate)  
+            #     top_mem_neurons.sort(reverse=True, key=lambda x:x[0])  # we keep the list sorted
+            # elif top_mem_neurons[-1][0]:
+            #     top_mem_neurons.append(candidate)
+            #     top_mem_neurons.sort(reverse=True, key=lambda x:x[0])  
+            #     top_mem_neurons.pop()
+        
         print(f"maximum selectivity for layer {layer}: {np.max(selectivity)}, which corresponds to neuron {np.argmax(selectivity)}")
-        max_selectivity_per_layer.append(np.max(selectivity))
     
+    print("top 10% memorizing neurons:", sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]))
+    print("top 10% memorizing neurons:", sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]))
+    print("length of top 10% memorizing neurons:", len(top_mem_neurons))
     

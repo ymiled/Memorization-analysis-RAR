@@ -176,10 +176,12 @@ class Block(nn.Module):
         )
 
 
-    def forward(self, x: torch.Tensor, attn_mask=None, c = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, attn_mask=None, c = None, intermediates=None) -> torch.Tensor:
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
         x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), attn_mask=attn_mask)
+        intermediates.append(x)
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        intermediates.append(x)
         return x
 
 
@@ -395,10 +397,8 @@ class RAR(BaseModel):
                         blk.forward, x, attn_mask, c=condition_token, use_reentrant=False)
             else:
                 # print("else : conditon_token is here ", condition_token)
-                x = blk(x, attn_mask=attn_mask, c=condition_token)
+                x = blk(x, attn_mask=attn_mask, c=condition_token, intermediates=intermediates)
                 
-            intermediates.append(x)
-
         if not self.blocks[0].attn.kv_cache:
             # remove cls token
             x = x[:, prefix - 1:]
