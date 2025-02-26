@@ -14,8 +14,10 @@ import torch.nn as nn
 import torchvision.models._utils as utils
 import plotly.express as px
 import plotly.graph_objects as go
+from TinyImagenet import TinyImageNet
+from matplotlib import pyplot as plt
 
-datapath = './data'
+imagenet_datapath = './data/tiny-imagenet-200'
 s = 1
 color_jitter = transforms.ColorJitter(
         0.9 * s, 0.9 * s, 0.9 * s, 0.1 * s)
@@ -33,32 +35,21 @@ data_transforms = transforms.Compose(
                 Normalize(0.5, 0.5)
             ])
 
-# resizing the image to 256x256 to be compatible with the VQ tokenizer : 
+# resizing images to 256x256 to be compatible with the VQ tokenizer : 
 resize_transform = transforms.Compose([
     transforms.Resize((256, 256)),
     transforms.ToTensor(),
     transforms.Normalize((0.5,), (0.5,))
 ])
 
-# Image_net = torchvision.datasets.ImageNet(
-#     datapath, download=True, transform=resize_transform
-# )
-
-
-CIFAR_10_Dataset = torchvision.datasets.CIFAR10(
-    datapath, train=True, download=True, transform=resize_transform
+IMAGENET_Dataset = TinyImageNet(
+    imagenet_datapath, split="val", transform=resize_transform
 )
 
 
-
-sublist = list(range(0, 2, 1))
-subset = torch.utils.data.Subset(CIFAR_10_Dataset, sublist)
+sublist = list(range(0, 5, 1))
+subset = torch.utils.data.Subset(IMAGENET_Dataset, sublist)
 dataloader = torch.utils.data.DataLoader(subset, 1, shuffle=False, num_workers=2)
-
-cifar_to_imagenet = {
-    6: 30,
-    9: 555
-}
 
 
 
@@ -79,37 +70,49 @@ model = demo_util.get_rar_generator(config)
 tokenizer.to(device)
 model.to(device)
 
-if __name__ == '__main__':
-    nb_layers = 82
-    total_neurons = 21154
-    top_percent = 0.1
-    top_mem_neurons = []
-    for layer in range(nb_layers):
-        final1 = []      
-        first = True
-        for img, label in (iter(dataloader)):
-            final = []        
-            img = img.to(device)
-            label = torch.tensor([cifar_to_imagenet[label.item()]]).to(device)
-            for j in range(10):
-                with torch.no_grad():
-                    tokens = tokenizer.encode(Aug(img))
-                    _, intermediates = model(tokens, condition=label)
-                    out = intermediates[layer]
-                    activations = np.mean(out.reshape(out.size(1), out.size(2)).cpu().detach().numpy(), axis=1)
-                    # we take the absolute value of the activations because some of them like Gelu have negative values
-                    # and we are interested in the magnitude of the activations
-                    activations = np.abs(activations)
-                    final.append(activations)
-                               
-            out1 = np.mean(np.array(final), axis=0)
 
-            final1.append(out1)
+def compute_utilities(layer): 
+    final1 = []    
+    for img, label in (iter(dataloader)):
+        final = []        
+        img = img.to(device)
+        label = label.to(device)
+        for j in range(10):
+            with torch.no_grad():
+                tokens = tokenizer.encode(Aug(img))
+                _, intermediates = model(tokens, condition=label)
+                out = intermediates[layer]
+                activations = np.mean(out.reshape(out.size(1), out.size(2)).cpu().detach().numpy(), axis=1)
+                # we take the absolute value of the activations because some of them like Gelu have negative values
+                # and we are interested in the magnitude of the activations
+                activations = np.abs(activations)
+                final.append(activations)
+                            
+        out1 = np.mean(np.array(final), axis=0)
+
+        final1.append(out1)
+    
+    finalout = np.array(final1)
+    maxout = np.max(finalout, axis=0)
+    medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
+    selectivity = (maxout - medianout) / (maxout + medianout)
+    return finalout, maxout, medianout, selectivity
+
+
+
+def top_memorizing_neurons(nb_layers, total_neurons, top_percent, layer=None):
+    top_mem_neurons = []
+    maxposition_per_layer = []
+    if layer is not None:
+        layers = [layer]
+    else:
+        layers = range(nb_layers)
         
-        finalout = np.array(final1)
-        maxout = np.max(finalout, axis=0)
-        medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
-        selectivity = (maxout - medianout) / (maxout + medianout)
+    for layer in layers:
+        finalout, maxout, medianout, selectivity = compute_utilities(layer)
+        maxposition_layer = np.argmax(finalout, axis=0)  # index of data points with max activation for each unit
+        maxposition_per_layer.append(maxposition_layer)
+        print(maxposition_layer)
         
         for neuron_idx, selec in enumerate(selectivity):
             candidate = (selec, layer, neuron_idx)
@@ -126,7 +129,33 @@ if __name__ == '__main__':
         
         print(f"maximum selectivity for layer {layer}: {np.max(selectivity)}, which corresponds to neuron {np.argmax(selectivity)}")
     
-    print("top 10% memorizing neurons:", sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]))
-    print("top 10% memorizing neurons:", sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]))
-    print("length of top 10% memorizing neurons:", len(top_mem_neurons))
+    return top_mem_neurons
+
+
+if __name__ == '__main__':
+    # nb_layers = 82
+    # total_neurons = 21154
+    # top_mem_neurons = top_memorizing_neurons(nb_layers, total_neurons, 0.1)
+    # print("top 10% memorizing neurons (unitmem decreasing order):", sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]))
+    # print("top 10% memorizing neurons (layer decreasing order) :", sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]))
     
+    selectivities = compute_utilities(layer=79)[3]
+    fig = px.histogram(x=selectivities, nbins=10)
+    fig.update_layout(
+        xaxis_title="Selectivity",
+        yaxis_title="Frequency",
+        plot_bgcolor="white",  
+        paper_bgcolor="white", 
+        font=dict(  # Set global font size
+        size=30  # Increase font size
+        ),
+        xaxis=dict(
+            title_font=dict(size=30), 
+            tickfont=dict(size=25)     
+        ),
+        yaxis=dict(
+            title_font=dict(size=30),  
+            tickfont=dict(size=25)    
+        )
+    )
+    fig.show()
