@@ -12,46 +12,26 @@ import demo_util
 from utils.train_utils import create_pretrained_tokenizer
 import torch.nn as nn
 import torchvision.models._utils as utils
-import plotly.express as px
-import plotly.graph_objects as go
-from TinyImagenet import TinyImageNet
-from matplotlib import pyplot as plt
+from sample_imagenet import load_dataloader
 
-imagenet_datapath = './data/tiny-imagenet-200'
 s = 1
 color_jitter = transforms.ColorJitter(
-        0.9 * s, 0.9 * s, 0.9 * s, 0.1 * s)
+        0.9 * s, 0.9 * s, 0.9 * s, 0.1 * s
+    )
+
 flip = transforms.RandomHorizontalFlip()
+
 Aug = transforms.Compose(
-    [
-    transforms.RandomResizedCrop(size=256),
-    transforms.RandomApply([flip], p=0.5),
-    transforms.RandomApply([color_jitter], p=0.9),
-    transforms.RandomGrayscale(p=0.1)
-    ])
-data_transforms = transforms.Compose(
-            [
-                ToTensor(),
-                Normalize(0.5, 0.5)
-            ])
+        [
+        transforms.RandomResizedCrop(size=256),
+        transforms.RandomApply([flip], p=0.5),
+        transforms.RandomApply([color_jitter], p=0.9),
+        transforms.RandomGrayscale(p=0.1)
+        ]
+    )
 
-# resizing images to 256x256 to be compatible with the VQ tokenizer : 
-resize_transform = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
-])
-
-IMAGENET_Dataset = TinyImageNet(
-    imagenet_datapath, split="val", transform=resize_transform
-)
-
-
-sublist = list(range(0, 5, 1))
-subset = torch.utils.data.Subset(IMAGENET_Dataset, sublist)
-dataloader = torch.utils.data.DataLoader(subset, 1, shuffle=False, num_workers=2)
-
-
+imagenet_datapath = './data/tiny-imagenet-200'
+dataloader = load_dataloader(save_path="data/imagenet_subset.pkl")
 
 rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][3]
 config = demo_util.get_config("configs/training/generator/rar.yaml")
@@ -73,14 +53,16 @@ model.to(device)
 
 def compute_utilities(layer): 
     final1 = []    
-    for img, label in (iter(dataloader)):
+    for img, label in tqdm(iter(dataloader)):
         final = []        
         img = img.to(device)
         label = label.to(device)
         for j in range(10):
             with torch.no_grad():
                 tokens = tokenizer.encode(Aug(img))
-                _, intermediates = model(tokens, condition=label)
+                _, intermediates = model(tokens, condition=label, return_intermediates=True, stop_at=layer)
+                if (len(intermediates) != layer + 1):
+                    print(f"Layer {layer} not found in the model")
                 out = intermediates[layer]
                 activations = np.mean(out.reshape(out.size(1), out.size(2)).cpu().detach().numpy(), axis=1)
                 # we take the absolute value of the activations because some of them like Gelu have negative values
@@ -94,9 +76,21 @@ def compute_utilities(layer):
     
     finalout = np.array(final1)
     maxout = np.max(finalout, axis=0)
+    maxposition = np.argmax(finalout, axis=0)  # index of data points with max activation for each unit in this layer
     medianout = np.median(np.sort(finalout, axis=0)[0:-1], axis=0)
     selectivity = (maxout - medianout) / (maxout + medianout)
-    return finalout, maxout, medianout, selectivity
+    
+    with open(f'results/{rar_model_size}_maxposition_per_layer.txt', 'a') as f_maxposition:
+        f_maxposition.write(f"Max position for layer {layer}:\n")
+        np.savetxt(f_maxposition, maxposition, delimiter=',')
+        f_maxposition.write("\n\n")
+
+    with open(f'results/{rar_model_size}_selectivities.txt', 'a') as f_selectivities:
+        f_selectivities.write(f"Selectivity for layer {layer}:\n")
+        np.savetxt(f_selectivities, selectivity, delimiter=',')
+        f_selectivities.write("\n\n")
+    
+    return finalout, maxout, maxposition, medianout, selectivity
 
 
 
@@ -109,53 +103,63 @@ def top_memorizing_neurons(nb_layers, total_neurons, top_percent, layer=None):
         layers = range(nb_layers)
         
     for layer in layers:
-        finalout, maxout, medianout, selectivity = compute_utilities(layer)
-        maxposition_layer = np.argmax(finalout, axis=0)  # index of data points with max activation for each unit
-        maxposition_per_layer.append(maxposition_layer)
-        print(maxposition_layer)
+        finalout, maxout, maxposition, medianout, selectivity = compute_utilities(layer)
+        maxposition_per_layer.append(maxposition)
+        # print(maxposition_layer)
         
         for neuron_idx, selec in enumerate(selectivity):
             candidate = (selec, layer, neuron_idx)
-            if selec > 0.7:
-                top_mem_neurons.append(candidate)
 
-            # if len(top_mem_neurons) < top_percent * total_neurons:  
-            #     top_mem_neurons.append(candidate)  
-            #     top_mem_neurons.sort(reverse=True, key=lambda x:x[0])  # we keep the list sorted
-            # elif top_mem_neurons[-1][0]:
-            #     top_mem_neurons.append(candidate)
-            #     top_mem_neurons.sort(reverse=True, key=lambda x:x[0])  
-            #     top_mem_neurons.pop()
+            if len(top_mem_neurons) < top_percent * total_neurons:  
+                top_mem_neurons.append(candidate)  
+                top_mem_neurons.sort(reverse=True, key=lambda x:x[0])  # we keep the list sorted
+            elif top_mem_neurons[-1][0]:
+                top_mem_neurons.append(candidate)
+                top_mem_neurons.sort(reverse=True, key=lambda x:x[0])  
+                top_mem_neurons.pop()
         
         print(f"maximum selectivity for layer {layer}: {np.max(selectivity)}, which corresponds to neuron {np.argmax(selectivity)}")
+
+    
+    with open(f'results/{rar_model_size}_highest_memorizing_units_unitmem_order.txt', 'a') as f:
+        f.write("Top memorizing neurons:\n")
+        np.savetxt(f, sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]), delimiter=',')
+        f.write("\n\n")
+    
+    with open(f'results/{rar_model_size}_highest_memorizing_units_layer_order.txt', 'a') as f:
+        f.write("Top memorizing neurons:\n")
+        np.savetxt(f, sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]), delimiter=',')
+        f.write("\n\n")        
+
     
     return top_mem_neurons
 
 
 if __name__ == '__main__':
-    # nb_layers = 82
-    # total_neurons = 21154
-    # top_mem_neurons = top_memorizing_neurons(nb_layers, total_neurons, 0.1)
-    # print("top 10% memorizing neurons (unitmem decreasing order):", sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]))
-    # print("top 10% memorizing neurons (layer decreasing order) :", sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]))
-    
-    selectivities = compute_utilities(layer=79)[3]
-    fig = px.histogram(x=selectivities, nbins=10)
-    fig.update_layout(
-        xaxis_title="Selectivity",
-        yaxis_title="Frequency",
-        plot_bgcolor="white",  
-        paper_bgcolor="white", 
-        font=dict(  # Set global font size
-        size=30  # Increase font size
-        ),
-        xaxis=dict(
-            title_font=dict(size=30), 
-            tickfont=dict(size=25)     
-        ),
-        yaxis=dict(
-            title_font=dict(size=30),  
-            tickfont=dict(size=25)    
-        )
-    )
-    fig.show()
+    nb_layers = config.model.generator.num_hidden_layers * 2 + 2
+    total_neurons = 21154 
+    top_mem_neurons = top_memorizing_neurons(nb_layers, total_neurons, 0.1)
+    print("top 10% memorizing neurons (unitmem decreasing order):", sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]))
+    print("top 10% memorizing neurons (layer decreasing order) :", sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]))
+
+   
+    # selectivities = compute_utilities(layer=35)[4]
+    # fig = px.histogram(x=selectivities, nbins=10)
+    # fig.update_layout(
+    #     xaxis_title="Selectivity",
+    #     yaxis_title="Frequency",
+    #     plot_bgcolor="white",  
+    #     paper_bgcolor="white", 
+    #     font=dict(  # Set global font size
+    #     size=50  # Increase font size
+    #     ),
+    #     xaxis=dict(
+    #         title_font=dict(size=50), 
+    #         tickfont=dict(size=45)     
+    #     ),
+    #     yaxis=dict(
+    #         title_font=dict(size=50),  
+    #         tickfont=dict(size=45)    
+    #     )
+    # )
+    # fig.show()

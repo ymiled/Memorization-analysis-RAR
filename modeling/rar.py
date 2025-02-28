@@ -176,12 +176,36 @@ class Block(nn.Module):
         )
 
 
-    def forward(self, x: torch.Tensor, attn_mask=None, c = None, intermediates=None) -> torch.Tensor:
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), attn_mask=attn_mask)
-        intermediates.append(x)
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        intermediates.append(x)
+    def forward(self, x: torch.Tensor, attn_mask=None, c = None, intermediates=None, current_layer=None, stop_at=None):
+        if current_layer is not None and current_layer < stop_at:
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
+            x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), attn_mask=attn_mask)
+            current_layer += 1
+            
+            if intermediates is not None:
+                intermediates.append(x)
+            if current_layer == stop_at:
+                return x, current_layer
+            
+            
+            if current_layer < stop_at:
+                x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+                if intermediates is not None:
+                    intermediates.append(x)
+                current_layer += 1
+                
+                return x, current_layer
+            
+        elif current_layer is None :
+            x = x + self.attn(self.norm1(x), attn_mask=attn_mask)
+            if intermediates is not None:
+                intermediates.append(x)
+            x = x + self.mlp(self.norm2(x))
+            if intermediates is not None:
+                intermediates.append(x)
+            
+            return x
+        
         return x
 
 
@@ -314,15 +338,16 @@ class RAR(BaseModel):
                            ):
         return torch.full_like(condition, self.none_condition_id)
     
-    def forward(self, input_ids, condition, return_labels=False):
+    def forward(self, input_ids, condition, return_labels=False, return_intermediates=False, stop_at=None):
         orders = self.sample_orders(input_ids)
-        return self.forward_fn(input_ids, condition, return_labels, orders)
+        return self.forward_fn(input_ids, condition, return_labels, orders, return_intermediates=return_intermediates, stop_at=stop_at)
 
     def forward_fn(self, input_ids, condition,
                    return_labels=False,
                    orders=None,
                    is_sampling=False,
-                   return_intermediates=True):
+                   return_intermediates=False,
+                   stop_at=None):
         
         # TODO: optimize the inference time where the computation of pos_embed etc can be shared across sampling steps.
         # Token space:
@@ -332,6 +357,7 @@ class RAR(BaseModel):
         #  codebook_size + 1 + nclass                   : the class drop label
         
         intermediates = []
+        current_layer = -1
 
         if orders is None:
             orders = self.get_raster_orders(input_ids)
@@ -397,7 +423,13 @@ class RAR(BaseModel):
                         blk.forward, x, attn_mask, c=condition_token, use_reentrant=False)
             else:
                 # print("else : conditon_token is here ", condition_token)
-                x = blk(x, attn_mask=attn_mask, c=condition_token, intermediates=intermediates)
+                if not return_intermediates:
+                    x = blk(x, attn_mask=attn_mask, c=condition_token, intermediates=None, current_layer=None, stop_at=None)
+                else:
+                    x , current_layer = blk(x, attn_mask=attn_mask, c=condition_token, intermediates=intermediates, current_layer=current_layer, stop_at=stop_at)
+                    if return_intermediates and current_layer == stop_at:
+                        return x, intermediates
+                
                 
         if not self.blocks[0].attn.kv_cache:
             # remove cls token
@@ -406,15 +438,28 @@ class RAR(BaseModel):
 
 
         x = self.adaln_before_head(x, condition_token)
-        intermediates.append(x)
-        x = self.lm_head(x)
-        intermediates.append(x)
-        
-        if return_intermediates:
+        if intermediates is not None:
+            intermediates.append(x)
+            
+        current_layer += 1
+        if return_intermediates and current_layer == stop_at:
             return x, intermediates
+        
+            
+        x = self.lm_head(x)
+        if intermediates is not None:
+            intermediates.append(x)
+            
+        current_layer += 1
+        if return_intermediates and current_layer == stop_at:
+            return x, intermediates
+        
+        # if return_intermediates:
+        #     return x, intermediates
 
         if return_labels:
             return x, labels
+        
         return x
     
     @torch.no_grad()
