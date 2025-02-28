@@ -7,7 +7,7 @@ from huggingface_hub import hf_hub_download
 from utils.train_utils import create_pretrained_tokenizer
 from sample_imagenet import sample_imagenet
 
-rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][3]
+rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][0]
 
 hf_hub_download(repo_id="fun-research/TiTok", filename=f"maskgit-vqgan-imagenet-f16-256.bin", local_dir="./")
 

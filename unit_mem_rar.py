@@ -33,7 +33,7 @@ Aug = transforms.Compose(
 imagenet_datapath = './data/tiny-imagenet-200'
 dataloader = load_dataloader(save_path="data/imagenet_subset.pkl")
 
-rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][3]
+rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][0]
 config = demo_util.get_config("configs/training/generator/rar.yaml")
 config.experiment.generator_checkpoint = f"{rar_model_size}.bin"
 config.model.generator.hidden_size = {"rar_b": 768, "rar_l": 1024, "rar_xl": 1280, "rar_xxl": 1408}[rar_model_size]
@@ -137,12 +137,26 @@ def top_memorizing_neurons(nb_layers, total_neurons, top_percent, layer=None):
 
 if __name__ == '__main__':
     nb_layers = config.model.generator.num_hidden_layers * 2 + 2
-    total_neurons = 21154 
+    total_neurons = 12898 # b : 12898 xl: 17026 xxl : 21154
     top_mem_neurons = top_memorizing_neurons(nb_layers, total_neurons, 0.1)
     print("top 10% memorizing neurons (unitmem decreasing order):", sorted(top_mem_neurons, reverse=True, key=lambda x:x[0]))
     print("top 10% memorizing neurons (layer decreasing order) :", sorted(top_mem_neurons, reverse=True, key=lambda x:x[1]))
 
-   
+    # nb_layers = config.model.generator.num_hidden_layers * 2 + 2
+    # total_neurons = 0
+    # for l in range(nb_layers):
+    #     img, label = next(iter(dataloader))
+    #     img = img.to(device)
+    #     label = label.to(device)
+    #     for j in range(1):
+    #         with torch.no_grad():
+    #             tokens = tokenizer.encode(Aug(img))
+    #             _, intermediates = model(tokens, condition=label, return_intermediates=True, stop_at=l)
+    #             out = intermediates[l]
+    #             total_neurons += out.size(1)
+    #             print(total_neurons)
+    # print(total_neurons)
+    
     # selectivities = compute_utilities(layer=35)[4]
     # fig = px.histogram(x=selectivities, nbins=10)
     # fig.update_layout(
