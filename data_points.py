@@ -59,7 +59,6 @@ memorized_data_points = []
 for i in range(len(top_10_memorizing_units)):
     unit = top_10_memorizing_units[i]
     layer_idx = layer_indices[i]
-    print(layer_idx, unit)
     data_point = data_images[layer_idx][unit]
 
     memorized_data_points.append(data_point)
