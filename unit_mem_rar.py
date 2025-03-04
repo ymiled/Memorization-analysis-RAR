@@ -57,7 +57,6 @@ def compute_utilities(layer):
         final = []        
         img = img.to(device)
         label = label.to(device)
-        print(label)
         for j in range(10):
             with torch.no_grad():
                 tokens = tokenizer.encode(Aug(img))

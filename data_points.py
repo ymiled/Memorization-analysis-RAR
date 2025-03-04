@@ -1,19 +1,13 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from collections import Counter
 import pandas as pd
 from sample_imagenet import load_dataloader
 import torch
-import torchvision.transforms as transforms
 import torchvision.models as models
-from torchvision.datasets import ImageFolder
-from torch.utils.data import DataLoader
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
-import matplotlib.pyplot as plt
 import plotly.express as px
 import pandas as pd
-import plotly.graph_objects as go
 
 file_path = "results/rar_b_highest_memorizing_units_layer_order.txt"
 data = np.loadtxt(file_path, delimiter=",", skiprows=1)
@@ -40,26 +34,33 @@ def extract_data_from_txt(file_path):
 
     with open(file_path, 'r') as f:
         for line in f:
-            line = line.strip()  
+            line = line.strip()
             if line.startswith("Max position for layer"):
+                if current_layer != -1:  
+                    data[current_layer] = layer_data
                 current_layer = int(line.split()[-1].strip(":"))
-                if current_layer not in data:
-                    data[current_layer] = []
+                layer_data = [] 
+            elif line:
+                position_data = int(round(float(line.split(":")[-1].strip())))
+                layer_data.append(position_data)
+
+        if current_layer != -1:
+            data[current_layer] = layer_data
+    
     return data
 
 
-file_path = "results/rar_xxl_maxposition_per_layer.txt"
+
+file_path = "results/rar_b_maxposition_per_layer.txt"
 data_images = extract_data_from_txt(file_path)
-
-
-
 memorized_data_points = []
+
 
 for i in range(len(top_10_memorizing_units)):
     unit = top_10_memorizing_units[i]
     layer_idx = layer_indices[i]
-
-    data_point = int(data_images[layer_idx][unit])
+    print(layer_idx, unit)
+    data_point = data_images[layer_idx][unit]
 
     memorized_data_points.append(data_point)
 
@@ -76,9 +77,7 @@ data_point_counts = Counter(memorized_data_points)
 
 for data_point, count in sorted(data_point_counts.items(), key=lambda x: x[1], reverse=True):
     if data_point in labels_map:
-        print(f"Data Point {data_point}: {count} times, label: {labels_map[data_point]}")
-    else:
-        print(f"Data Point {data_point}: {count} times, Image: Not found")
+        print(f"Data Point {data_point}: {count} times") # label: {labels_map[data_point]}")
 
 
 
