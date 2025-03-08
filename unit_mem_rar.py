@@ -21,16 +21,21 @@ color_jitter = transforms.ColorJitter(
 
 flip = transforms.RandomHorizontalFlip()
 
-Aug = transforms.Compose(
-        [
-        transforms.RandomResizedCrop(size=256),
-        transforms.RandomApply([flip], p=0.5),
-        transforms.RandomApply([color_jitter], p=0.9),
-        transforms.RandomGrayscale(p=0.1)
-        ]
-    )
+# Aug = transforms.Compose(
+#         [
+#         transforms.RandomResizedCrop(size=256),
+#         transforms.RandomApply([flip], p=0.5),
+#         transforms.RandomApply([color_jitter], p=0.9),
+#         transforms.RandomGrayscale(p=0.1)
+#         ]
+#     )
 
-imagenet_datapath = './data/tiny-imagenet-200'
+Aug = transforms.Compose([
+    transforms.CenterCrop(size=256),  
+    transforms.RandomHorizontalFlip(p=0.5),
+])
+
+imagenet_datapath = './data/1k-imagenet'
 dataloader = load_dataloader(save_path="data/imagenet_subset.pkl")
 
 rar_model_size = ["rar_b", "rar_l", "rar_xl", "rar_xxl"][0]

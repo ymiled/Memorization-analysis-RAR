@@ -8,6 +8,7 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import plotly.express as px
 import pandas as pd
+from sample_imagenet import *
 
 file_path = "results/rar_b_highest_memorizing_units_layer_order.txt"
 data = np.loadtxt(file_path, delimiter=",", skiprows=1)
@@ -25,6 +26,7 @@ df = pd.DataFrame({
 
 top_10_memorizing_units = neuron_indices
 top_10_memorizing_units_layers_idx = layer_indices
+   
 
 
 def extract_data_from_txt(file_path):
@@ -62,7 +64,7 @@ for i in range(len(top_10_memorizing_units)):
     data_point = data_images[layer_idx][unit]
 
     memorized_data_points.append(data_point)
-
+    
 
 dataloader_imagenet = load_dataloader(save_path="data/imagenet_subset.pkl")
 
@@ -114,12 +116,11 @@ print(outlier_indices)
 
 top_most_common = data_point_counts.most_common(10)
 top_most_common_indices = [idx for idx, _ in top_most_common]
-# see if the top most common data points are also outliers
+# we see if the top most common data points are also outliers :
 outliers_in_top_common = set(top_most_common_indices).intersection(outlier_indices)
 print("outliers in top common: ", outliers_in_top_common)
 
 
-# Example data (replace with real counts)
 data = {
     "Data point": [data_point for data_point, _ in sorted(data_point_counts.items(), key=lambda x: x[1], reverse=True)],
     "Frequency": [count for _, count in sorted(data_point_counts.items(), key=lambda x: x[1], reverse=True)]
